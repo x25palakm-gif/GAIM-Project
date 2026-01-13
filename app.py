@@ -115,7 +115,7 @@ if "pages" not in st.session_state:
 # -------------------------------------------------
 # Generate story + ALL images upfront
 # -------------------------------------------------
-if st.button("🌟 Explain this question"):
+if st.button("🌟 Explain this question", key="generate"):
     st.session_state.page_index = 0
 
     prompt = f"""
