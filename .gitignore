@@ -1,0 +1,16 @@
+# Python
+__pycache__/
+*.pyc
+
+# Secrets
+.env
+.env.*
+*.key
+
+# Generated images
+generated_images/
+
+# macOS
+.DS_Store
+
+
