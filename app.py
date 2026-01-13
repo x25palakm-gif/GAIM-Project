@@ -1,4 +1,5 @@
 import os
+import re
 import base64
 import hashlib
 from pathlib import Path
@@ -17,17 +18,13 @@ st.set_page_config(
 )
 
 # -------------------------------------------------
-# API keys
+# Secrets (works locally + deployed)
 # -------------------------------------------------
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY") or st.secrets.get("GEMINI_API_KEY")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY") or st.secrets.get("OPENAI_API_KEY")
 
-if not GEMINI_API_KEY:
-    st.error("Gemini API key not found. Please set GEMINI_API_KEY.")
-    st.stop()
-
-if not OPENAI_API_KEY:
-    st.error("OpenAI API key not found. Please set OPENAI_API_KEY.")
+if not GEMINI_API_KEY or not OPENAI_API_KEY:
+    st.error("API keys not found.")
     st.stop()
 
 # -------------------------------------------------
@@ -42,94 +39,54 @@ IMAGE_DIR = Path("generated_images")
 IMAGE_DIR.mkdir(exist_ok=True)
 
 # -------------------------------------------------
-# OpenAI image generator
+# Image generation (cached on disk)
 # -------------------------------------------------
 def generate_image(prompt: str):
-    """
-    Generate a child-safe illustration using OpenAI Images.
-    Images are cached locally to avoid repeat costs.
-    """
     filename = hashlib.sha1(prompt.encode()).hexdigest()[:12] + ".png"
     path = IMAGE_DIR / filename
 
     if path.exists():
         return path
 
-    try:
-        full_prompt = (
-            "Children's picture book illustration. "
-            "Soft watercolor style. Simple shapes. "
-            "Pastel colors. No text. Kid-safe. "
-            f"Scene to illustrate: {prompt}"
-        )
+    full_prompt = (
+        "Children's picture book illustration. "
+        "Soft watercolor style. Simple shapes. "
+        "Pastel colors. No text. Kid-safe. "
+        f"Scene: {prompt}"
+    )
 
-        result = openai_client.images.generate(
-            model="gpt-image-1",
-            prompt=full_prompt,
-            size="1024x1024"
-        )
+    result = openai_client.images.generate(
+        model="gpt-image-1",
+        prompt=full_prompt,
+        size="1024x1024"
+    )
 
-        image_base64 = result.data[0].b64_json
-        image_bytes = base64.b64decode(image_base64)
-
-        with open(path, "wb") as f:
-            f.write(image_bytes)
-
-        return path
-
-    except Exception as e:
-        st.error("Image generation failed (OpenAI)")
-        st.code(str(e))
-        return None
+    image_bytes = base64.b64decode(result.data[0].b64_json)
+    path.write_bytes(image_bytes)
+    return path
 
 # -------------------------------------------------
-# Styling (UNCHANGED)
+# Styling
 # -------------------------------------------------
 st.markdown(
     """
     <style>
     body { background-color: #FFF8F0; }
-
-    .main {
-        padding: 2rem;
-        max-width: 720px;
-        margin: auto;
-    }
-
-    h1 {
-        color: #FF6F61;
-        text-align: center;
-        font-family: "Comic Sans MS", "Trebuchet MS", sans-serif;
-    }
-
-    .explain-card {
-        background-color: #FFFFFF;
-        padding: 22px;
-        border-radius: 16px;
-        margin-bottom: 20px;
+    .page-card {
+        background-color: white;
+        padding: 24px;
+        border-radius: 18px;
         box-shadow: 0 4px 12px rgba(0,0,0,0.05);
     }
-
-    .explain-text {
+    .page-text {
         font-size: 18px;
-        line-height: 1.6;
-        color: #333333;
+        line-height: 1.7;
+        color: #333;
     }
-
-    .illustration-text {
+    .nav {
+        text-align: center;
         font-size: 14px;
-        color: #777777;
-        margin-top: 10px;
-        font-style: italic;
-    }
-
-    .stButton > button {
-        background-color: #88B04B;
-        color: white;
-        font-size: 18px;
-        padding: 10px 28px;
-        border-radius: 14px;
-        border: none;
+        color: #666;
     }
     </style>
     """,
@@ -137,157 +94,132 @@ st.markdown(
 )
 
 # -------------------------------------------------
-# UI (UNCHANGED)
+# UI
 # -------------------------------------------------
 st.title("🌙 A Thousand Whys Before Bedtime")
 
-st.write(
-    "✨ A cozy, colorful place where moms turn little **“why?”** questions "
-    "into gentle, illustrated explanations using AI."
-)
-
-st.divider()
-
-st.subheader("👶 Tell us about your little explorer")
-
-child_name = st.text_input("Child's name (optional)")
-
-age = st.selectbox(
-    "Select your child's age",
-    options=list(range(3, 11))
-)
-
-st.divider()
-
-st.subheader("❓ What question came today?")
-
-question = st.text_input(
-    "What is your child asking?",
-    placeholder="E.g., Why does a lion roar?"
-)
-
-st.divider()
-
-st.subheader("🎨 How should the answer feel?")
-
+age = st.selectbox("Child's age", list(range(3, 11)))
+question = st.text_input("What is your child asking?", "Why is the sea salty?")
 tone = st.selectbox(
-    "Choose the story tone",
-    options=[
-        "Gentle & soothing",
-        "Funny",
-        "Curious explorer",
-        "Simple & direct"
-    ]
+    "Tone",
+    ["Gentle & soothing", "Funny", "Curious explorer", "Simple & direct"]
 )
-
-st.divider()
 
 # -------------------------------------------------
-# Generate explanation
+# Session state
+# -------------------------------------------------
+if "pages" not in st.session_state:
+    st.session_state.pages = []
+    st.session_state.page_index = 0
+
+# -------------------------------------------------
+# Generate story + ALL images upfront
 # -------------------------------------------------
 if st.button("🌟 Explain this question"):
-    if not question:
-        st.warning("Please type a question first.")
-    else:
-        prompt = f"""
-You are creating an illustrated explanation for a young child.
+    st.session_state.page_index = 0
 
-Explain the following question in a SIMPLE, CHILD-FRIENDLY way.
-
-You are explaining a child’s “why” question the way a good children’s book would.
-
-Your job is to help a child truly understand the idea — not to tell a story, and not to talk to parents.
+    prompt = f"""
+You are creating a children's STORYBOOK.
 
 Question: {question}
 Child age: {age}
 Tone: {tone}
 
-AGE RULES (very important):
-- Use words, examples, and sentence length appropriate for a {age}-year-old
-- Younger children (3–5): very simple words, short sentences, familiar objects
-- Older children (6–10): slightly more detail, but still simple and concrete
-- Avoid abstract terms unless they are explained using everyday examples
+Rules:
+- Age-appropriate language
+- Simple, clear explanations
+- No parents, no bedtime framing
 
-STRUCTURE RULE (must follow):
-The explanation must flow like this:
-1. WHAT it is (what the thing or idea is)
-2. WHY it exists or happens (the main reason, simply explained)
-3. HOW it works (in simple steps or cause-and-effect)
+Structure:
+Page 1: WHAT it is
+Page 2: WHY it happens
+Page 3–4: HOW it works
+Final page: What it means for the child
 
-CONTENT RULES:
-- Do NOT include bedtime, parents, or story framing
-- Do NOT include characters like mommy, daddy, or teachers
-- Do NOT ask questions back to the child
-- Focus only on the idea being explained
-- Be calm, curious, and reassuring
-- Avoid unnecessary details or side facts
+FORMAT (STRICT):
+[Page]
+2–3 simple sentences.
 
-FORMAT RULES (strict):
-- Write 4–6 short sections
-- Each section explains ONE clear idea
-- Each section should be 2–3 simple sentences
+[Illustration idea]
+Describe one picture.
 
-For EACH section:
-1. Write the explanation text
-2. On the very next line, write exactly:
-[Illustration idea: describe what should be drawn in a child-friendly picture]
-
-Example style (not content):
-Water is all around us in the world.
-We drink it, wash with it, and see it in rivers.
-[Illustration idea: a child looking at rain, a river, and a glass of water]
-
-Do not add titles, summaries, or anything extra.
-Do not include emojis.
-Do not include explanations outside this format.
-
+Repeat for 4–6 pages.
 """
 
-        try:
-            response = gemini_client.models.generate_content(
-                model=TEXT_MODEL,
-                contents=prompt
-            )
+    response = gemini_client.models.generate_content(
+        model=TEXT_MODEL,
+        contents=prompt
+    )
 
-            explanation_text = response.text
+    raw = response.text
 
-            st.subheader("📘 Illustrated Explanation")
+    pages = []
+    chunks = re.split(r"\[Page\]", raw, flags=re.IGNORECASE)
 
-            sections = explanation_text.split("[Illustration idea:")
+    with st.spinner("Creating your storybook…"):
+        for chunk in chunks:
+            if not chunk.strip():
+                continue
 
-            for section in sections:
-                if not section.strip():
-                    continue
+            parts = re.split(r"\[Illustration idea\]", chunk, flags=re.IGNORECASE)
+            if len(parts) != 2:
+                continue
 
-                parts = section.split("]")
-                text_part = parts[0].strip()
-                illustration = parts[1].strip() if len(parts) > 1 else ""
+            text = parts[0].strip()
+            illustration_prompt = parts[1].strip()
 
-                st.markdown(
-                    f"""
-                    <div class="explain-card">
-                        <div class="explain-text">{text_part}</div>
-                        <div class="illustration-text">
-                            🎨 Illustration idea: {illustration}
-                        </div>
-                    </div>
-                    """,
-                    unsafe_allow_html=True
-                )
+            img_path = generate_image(illustration_prompt)
 
-                if illustration:
-                    with st.spinner("Creating illustration…"):
-                        img_path = generate_image(illustration)
+            pages.append({
+                "text": text,
+                "image_path": str(img_path)
+            })
 
-                    if img_path:
-                        st.image(str(img_path), use_container_width=True)
-
-        except Exception as e:
-            st.error("Something went wrong while generating the explanation.")
-            st.code(str(e), language="text")
+    st.session_state.pages = pages
+    st.rerun()
 
 # -------------------------------------------------
-# Footer
+# Render storybook
 # -------------------------------------------------
-st.markdown("---")
-st.caption("💛 Built to help curious kids understand the world")
+if st.session_state.pages:
+    page = st.session_state.pages[st.session_state.page_index]
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+        st.markdown(
+            f"""
+            <div class="page-card">
+                <div class="page-text">
+                    {page["text"]}
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+
+    with col2:
+        st.image(page["image_path"], use_container_width=True)
+
+    st.divider()
+
+    col_prev, col_mid, col_next = st.columns([1, 2, 1])
+
+    with col_prev:
+        if st.button("⬅ Previous", disabled=st.session_state.page_index == 0):
+            st.session_state.page_index -= 1
+            st.rerun()
+
+    with col_mid:
+        st.markdown(
+            f"<div class='nav'>Page {st.session_state.page_index + 1} of {len(st.session_state.pages)}</div>",
+            unsafe_allow_html=True
+        )
+
+    with col_next:
+        if st.button(
+            "Next ➡",
+            disabled=st.session_state.page_index == len(st.session_state.pages) - 1
+        ):
+            st.session_state.page_index += 1
+            st.rerun()
